@@ -9,7 +9,6 @@ BOT_TOKEN = "8981240580:AAGa_iJR6cq_xn5vjy5T94ScoJ60GGY0HKg"
 BOT_USERNAME = "Anidavi_bot"
 ADMIN_IDS = [5654433816]
 
-# Majburiy obuna kanallari (qo'shish: /addchannel, o'chirish: /removechannel)
 REQUIRED_CHANNELS = [
     {"name": "AniDavi Official", "username": "@anidavi_official", "link": "https://t.me/anidavi_official"},
 ]
@@ -17,26 +16,23 @@ REQUIRED_CHANNELS = [
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 users_db = set()
-
-# anime_db struktura:
-# { anime_id: { 'name': str, 'info': str, 'preview': file_id, 'episodes': [file_id, ...] } }
-anime_db = {}
+anime_db = {}        # { id: {name, info, preview_file_id, preview_type, thumb_file_ids, episodes} }
 anime_counter = [0]
-
-# ===================== YORDAMCHI =====================
 
 def get_status(uid):
     return "👑 Admin" if uid in ADMIN_IDS else "Oddiy"
 
-def main_menu():
-    return InlineKeyboardMarkup([
+def main_menu(uid):
+    buttons = [
         [InlineKeyboardButton("🔍 Anime izlash", callback_data="search")],
         [InlineKeyboardButton("📚 Qo'llanma", callback_data="guide"),
          InlineKeyboardButton("💰 Reklama", callback_data="ads")],
-        [InlineKeyboardButton("📊 Statistika", callback_data="stats")],
         [InlineKeyboardButton("🤖 Bot haqida", callback_data="about")],
         [InlineKeyboardButton("💎 VIP obuna (cheklovlarsiz)", callback_data="vip")],
-    ])
+    ]
+    if uid in ADMIN_IDS:
+        buttons.append([InlineKeyboardButton("📊 Statistika", callback_data="stats")])
+    return InlineKeyboardMarkup(buttons)
 
 def back_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Orqaga", callback_data="menu")]])
@@ -62,8 +58,8 @@ def episodes_keyboard(anime_id):
         return back_menu()
     buttons = []
     row = []
-    for i, _ in enumerate(anime['episodes'], 1):
-        row.append(InlineKeyboardButton(f"{i}-qism", callback_data=f"ep_{anime_id}_{i-1}"))
+    for i in range(len(anime['episodes'])):
+        row.append(InlineKeyboardButton(f"{i+1}-qism", callback_data=f"ep_{anime_id}_{i}"))
         if len(row) == 3:
             buttons.append(row)
             row = []
@@ -72,13 +68,20 @@ def episodes_keyboard(anime_id):
     buttons.append([InlineKeyboardButton("🔙 Orqaga", callback_data="menu")])
     return InlineKeyboardMarkup(buttons)
 
-# ===================== /start =====================
+def search_results_keyboard(results):
+    buttons = []
+    for aid, anime in results:
+        buttons.append([InlineKeyboardButton(f"🎌 {anime['name']}", callback_data=f"anime_info_{aid}")])
+    buttons.append([InlineKeyboardButton("🔙 Orqaga", callback_data="menu")])
+    return InlineKeyboardMarkup(buttons)
+
+# ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     users_db.add(user.id)
 
-    # Deep link: tomosha qilish
+    # Deep link orqali anime ochish
     if context.args and context.args[0].startswith("anime_"):
         anime_id = int(context.args[0].split("_")[1])
         if user.id not in ADMIN_IDS:
@@ -94,14 +97,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await update.message.reply_text(
             f"🎌 <b>{anime['name']}</b>\n\n{anime['info']}\n\n"
-            f"📺 Jami {len(anime['episodes'])} ta qism mavjud\n\n"
-            f"👇 Qismni tanlang:",
-            reply_markup=episodes_keyboard(anime_id),
-            parse_mode="HTML"
+            f"📺 Jami {len(anime['episodes'])} ta qism\n\n👇 Qismni tanlang:",
+            reply_markup=episodes_keyboard(anime_id), parse_mode="HTML"
         )
         return
 
-    # Oddiy start
+    # Majburiy obuna
     if user.id not in ADMIN_IDS:
         if not await is_subscribed(user.id, context.bot):
             await update.message.reply_text(
@@ -110,22 +111,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+    extra = ""
     if user.id in ADMIN_IDS:
         extra = (
-            "\n\n📹 <b>Anime qo'shish:</b> /newanime\n"
-            "📋 <b>Kanallar:</b> /listchannels\n"
-            "➕ <b>Kanal qo'shish:</b> /addchannel @username Nomi\n"
-            "➖ <b>Kanal o'chirish:</b> /removechannel @username\n"
-            "📢 <b>Xabar yuborish:</b> /broadcast Xabar"
+            "\n\n<b>🛠 Admin buyruqlar:</b>\n"
+            "/newanime — Yangi anime qo'shish\n"
+            "/addadmin @username yoki ID\n"
+            "/removeadmin @username yoki ID\n"
+            "/addchannel @username Nomi\n"
+            "/removechannel @username\n"
+            "/listchannels — Kanallar ro'yxati\n"
+            "/broadcast Xabar — Hammaga yuborish"
         )
-    else:
-        extra = ""
 
     await update.message.reply_text(
         f"📊 Status: {get_status(user.id)}\n"
         f"🆔 ID: <code>{user.id}</code>{extra}\n\n"
-        f"👇 Quyidagi tugmalar orqali botdan foydalaning:",
-        reply_markup=main_menu(), parse_mode="HTML"
+        f"👇 Botdan foydalaning:",
+        reply_markup=main_menu(user.id), parse_mode="HTML"
     )
 
 # ===================== ADMIN: ANIME QO'SHISH =====================
@@ -136,15 +139,48 @@ async def newanime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data['step'] = 'preview'
     await update.message.reply_text(
-        "🎬 <b>Yangi anime qo'shish boshlandi!</b>\n\n"
-        "<b>1-qadam:</b> Preview video yuboring (10-15 sekund)",
+        "🎬 <b>Yangi anime qo'shish!</b>\n\n"
+        "<b>1-qadam:</b> Preview rasm yoki qisqa video yuboring",
         parse_mode="HTML"
     )
+
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_IDS:
+        # Foydalanuvchi rasm yuborsa — anime qidirish
+        await search_by_media(update, context, "photo")
+        return
+
+    step = context.user_data.get('step', '')
+    photo = update.message.photo[-1]
+    file_id = photo.file_id
+
+    if step == 'preview':
+        context.user_data['preview'] = file_id
+        context.user_data['preview_type'] = 'photo'
+        context.user_data['step'] = 'info'
+        await update.message.reply_text(
+            "✅ Preview rasm saqlandi!\n\n"
+            "<b>2-qadam:</b> Anime ma'lumotlarini yozing:\n\n"
+            "<code>Naruto Shippuden\nQism: 1-500\nTil: O'zbek\nJanr: Aksyon</code>",
+            parse_mode="HTML"
+        )
+    elif step == 'thumbs':
+        # Qidirish uchun qo'shimcha rasmlar
+        anime_id = context.user_data.get('current_anime_id')
+        if anime_id in anime_db:
+            anime_db[anime_id]['thumb_file_ids'].append(file_id)
+            await update.message.reply_text(
+                f"✅ Qidiruv rasmi saqlandi! Yana yuborish mumkin yoki /done yozing."
+            )
+    else:
+        await update.message.reply_text("❗ Avval /newanime yuboring!")
 
 async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text("👇 /start bosing", reply_markup=main_menu())
+        # Foydalanuvchi video yuborsa — anime qidirish
+        await search_by_media(update, context, "video")
         return
 
     video = update.message.video or update.message.document
@@ -153,104 +189,156 @@ async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == 'preview':
         context.user_data['preview'] = file_id
+        context.user_data['preview_type'] = 'video'
         context.user_data['step'] = 'info'
         await update.message.reply_text(
             "✅ Preview video saqlandi!\n\n"
             "<b>2-qadam:</b> Anime ma'lumotlarini yozing:\n\n"
-            "<code>Naruto Shippuden\n"
-            "Qism: 1-500\n"
-            "Til: O'zbek\n"
-            "Janr: Aksyon</code>",
+            "<code>Naruto Shippuden\nQism: 1-500\nTil: O'zbek\nJanr: Aksyon</code>",
             parse_mode="HTML"
         )
-
     elif step == 'episodes':
         anime_id = context.user_data.get('current_anime_id')
         if anime_id and anime_id in anime_db:
             anime_db[anime_id]['episodes'].append(file_id)
             ep_num = len(anime_db[anime_id]['episodes'])
             await update.message.reply_text(
-                f"✅ {ep_num}-qism saqlandi!\n\n"
-                f"Yana qism yuborish mumkin yoki /done yozing.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ Tugatish", callback_data=f"done_{anime_id}")]
-                ])
+                f"✅ {ep_num}-qism saqlandi! Yana yuboring yoki /done yozing."
             )
     else:
+        await update.message.reply_text("❗ Avval /newanime yuboring!")
+
+# ===================== FOYDALANUVCHI: MEDIA QIDIRISH =====================
+
+async def search_by_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id not in ADMIN_IDS:
+        if not await is_subscribed(user.id, context.bot):
+            await update.message.reply_text(
+                "⚠️ <b>Botdan foydalanish uchun obuna bo'ling!</b>",
+                reply_markup=subscribe_keyboard(), parse_mode="HTML"
+            )
+            return
+
+    if not anime_db:
         await update.message.reply_text(
-            "❗ Avval /newanime buyrug'ini yuboring!",
+            "❌ Hozircha animeler yo'q!\n\n"
+            "Kanalimizga o'ting: @anidavi_official",
         )
+        return
+
+    # Barcha animeni ko'rsatamiz (rasm/video bilan qidirishda)
+    results = list(anime_db.items())
+    if results:
+        await update.message.reply_text(
+            "🔍 <b>Mavjud animeler:</b>\n\nQaysi animeni ko'rmoqchisiz?",
+            reply_markup=search_results_keyboard(results),
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text("❌ Anime topilmadi!")
+
+# ===================== MATN QIDIRISH =====================
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     users_db.add(user.id)
     text = update.message.text or ""
 
-    if user.id in ADMIN_IDS:
-        step = context.user_data.get('step', '')
+    # Admin info yozmoqda
+    if user.id in ADMIN_IDS and context.user_data.get('step') == 'info':
+        lines = text.strip().split('\n')
+        anime_nomi = lines[0]
+        info = '\n'.join(f"➤ {l}" for l in lines[1:]) if len(lines) > 1 else ""
+        anime_counter[0] += 1
+        anime_id = anime_counter[0]
+        anime_db[anime_id] = {
+            'name': anime_nomi,
+            'info': info,
+            'preview': context.user_data.get('preview'),
+            'preview_type': context.user_data.get('preview_type', 'video'),
+            'thumb_file_ids': [],
+            'episodes': []
+        }
+        context.user_data['current_anime_id'] = anime_id
+        context.user_data['step'] = 'episodes'
+        await update.message.reply_text(
+            f"✅ <b>{anime_nomi}</b> saqlandi!\n\n"
+            f"<b>3-qadam:</b> Qismlarni yuboring (birinchidan boshlang)\n"
+            f"Tugagach /done yozing.",
+            parse_mode="HTML"
+        )
+        return
 
-        if step == 'info':
-            lines = text.strip().split('\n')
-            anime_nomi = lines[0]
-            info = '\n'.join(f"➤ {l}" for l in lines[1:]) if len(lines) > 1 else ""
-
-            anime_counter[0] += 1
-            anime_id = anime_counter[0]
-            anime_db[anime_id] = {
-                'name': anime_nomi,
-                'info': info,
-                'preview': context.user_data.get('preview'),
-                'episodes': []
-            }
-            context.user_data['current_anime_id'] = anime_id
-            context.user_data['step'] = 'episodes'
-
+    # Obuna tekshirish
+    if user.id not in ADMIN_IDS:
+        if not await is_subscribed(user.id, context.bot):
             await update.message.reply_text(
-                f"✅ Ma'lumot saqlandi!\n\n"
-                f"<b>3-qadam:</b> Endi qismlarni yuboring!\n"
-                f"Birinchi qismdan boshlang — bot tartib bilan saqlaydi.\n\n"
-                f"Hammasini yuborb bo'lgach /done yozing.",
+                "⚠️ <b>Botdan foydalanish uchun obuna bo'ling!</b>",
+                reply_markup=subscribe_keyboard(), parse_mode="HTML"
+            )
+            return
+
+    # Anime qidirish (nom bo'yicha)
+    if text and len(text) >= 2:
+        query = text.lower().strip()
+        results = [
+            (aid, anime) for aid, anime in anime_db.items()
+            if query in anime['name'].lower()
+        ]
+        if results:
+            await update.message.reply_text(
+                f"🔍 <b>'{text}' bo'yicha natijalar:</b>",
+                reply_markup=search_results_keyboard(results),
+                parse_mode="HTML"
+            )
+            return
+        else:
+            await update.message.reply_text(
+                f"❌ <b>'{text}'</b> bo'yicha anime topilmadi!\n\n"
+                f"Boshqa nom kiriting yoki kanalga o'ting: @anidavi_official",
                 parse_mode="HTML"
             )
             return
 
-    await update.message.reply_text("👇 /start bosing", reply_markup=main_menu())
+    await update.message.reply_text("👇 /start bosing", reply_markup=main_menu(user.id))
+
+# ===================== /done =====================
 
 async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id not in ADMIN_IDS:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     anime_id = context.user_data.get('current_anime_id')
     if not anime_id or anime_id not in anime_db:
         await update.message.reply_text("❌ Anime topilmadi!")
         return
-
     await finish_anime(update.message, context, anime_id)
 
 async def finish_anime(message, context, anime_id):
     anime = anime_db[anime_id]
     caption = (
-        f"🎌 <b>{anime['name']}</b>\n\n"
-        f"{anime['info']}\n\n"
-        f"📺 {len(anime['episodes'])} ta qism\n"
-        f"➤ Kanal: @anidavi_official"
+        f"🎌 <b>{anime['name']}</b>\n\n{anime['info']}\n\n"
+        f"📺 {len(anime['episodes'])} ta qism\n➤ Kanal: @anidavi_official"
     )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✨ Tomosha qilish ✨",
-            url=f"https://t.me/{BOT_USERNAME}?start=anime_{anime_id}")]
-    ])
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✨ Tomosha qilish ✨",
+            url=f"https://t.me/{BOT_USERNAME}?start=anime_{anime_id}")
+    ]])
     try:
-        await context.bot.send_video(
-            chat_id="@anidavi_official",
-            video=anime['preview'],
-            caption=caption,
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
+        if anime['preview_type'] == 'photo':
+            await context.bot.send_photo(
+                chat_id="@anidavi_official",
+                photo=anime['preview'], caption=caption,
+                reply_markup=keyboard, parse_mode="HTML"
+            )
+        else:
+            await context.bot.send_video(
+                chat_id="@anidavi_official",
+                video=anime['preview'], caption=caption,
+                reply_markup=keyboard, parse_mode="HTML"
+            )
         await message.reply_text(
-            f"✅ Kaналга yuborildi!\n"
-            f"🎌 <b>{anime['name']}</b>\n"
-            f"📺 {len(anime['episodes'])} ta qism",
+            f"✅ Kanalga yuborildi!\n🎌 <b>{anime['name']}</b> — {len(anime['episodes'])} ta qism",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -268,54 +356,66 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if d == "check_sub":
         if await is_subscribed(user.id, context.bot):
             await q.edit_message_text(
-                f"✅ Xush kelibsiz!\n\n"
-                f"📊 Status: {get_status(user.id)}\n"
-                f"🆔 ID: <code>{user.id}</code>\n\n"
-                f"👇 Botdan foydalaning:",
-                reply_markup=main_menu(), parse_mode="HTML"
+                f"✅ Xush kelibsiz!\n📊 Status: {get_status(user.id)}\n"
+                f"🆔 ID: <code>{user.id}</code>\n\n👇 Botdan foydalaning:",
+                reply_markup=main_menu(user.id), parse_mode="HTML"
             )
         else:
             await q.answer("❌ Hali obuna bo'lmadingiz!", show_alert=True)
         return
 
-    # Qism ko'rish
+    if d.startswith("anime_info_"):
+        anime_id = int(d.split("_")[2])
+        if user.id not in ADMIN_IDS and not await is_subscribed(user.id, context.bot):
+            await q.edit_message_text("⚠️ <b>Obuna bo'ling!</b>", reply_markup=subscribe_keyboard(), parse_mode="HTML")
+            return
+        anime = anime_db.get(anime_id)
+        if not anime:
+            await q.answer("❌ Anime topilmadi!", show_alert=True)
+            return
+        await q.edit_message_text(
+            f"🎌 <b>{anime['name']}</b>\n\n{anime['info']}\n\n"
+            f"📺 Jami {len(anime['episodes'])} ta qism\n\n👇 Qismni tanlang:",
+            reply_markup=episodes_keyboard(anime_id), parse_mode="HTML"
+        )
+        return
+
     if d.startswith("ep_"):
         parts = d.split("_")
         anime_id = int(parts[1])
         ep_index = int(parts[2])
         if user.id not in ADMIN_IDS and not await is_subscribed(user.id, context.bot):
-            await q.edit_message_text(
-                "⚠️ <b>Obuna bo'ling!</b>",
-                reply_markup=subscribe_keyboard(), parse_mode="HTML"
-            )
+            await q.edit_message_text("⚠️ <b>Obuna bo'ling!</b>", reply_markup=subscribe_keyboard(), parse_mode="HTML")
             return
         anime = anime_db.get(anime_id)
         if not anime or ep_index >= len(anime['episodes']):
             await q.answer("❌ Qism topilmadi!", show_alert=True)
             return
         await context.bot.send_video(
-            chat_id=user.id,
-            video=anime['episodes'][ep_index],
-            caption=f"🎌 <b>{anime['name']}</b> — {ep_index+1}-qism",
-            parse_mode="HTML"
+            chat_id=user.id, video=anime['episodes'][ep_index],
+            caption=f"🎌 <b>{anime['name']}</b> — {ep_index+1}-qism", parse_mode="HTML"
         )
-        return
-
-    if d.startswith("done_"):
-        anime_id = int(d.split("_")[1])
-        await finish_anime(q.message, context, anime_id)
         return
 
     if d == "menu":
         await q.edit_message_text(
-            f"📊 Status: {get_status(user.id)}\n"
-            f"🆔 ID: <code>{user.id}</code>\n\n"
-            f"👇 Botdan foydalaning:",
-            reply_markup=main_menu(), parse_mode="HTML"
+            f"📊 Status: {get_status(user.id)}\n🆔 ID: <code>{user.id}</code>\n\n👇 Botdan foydalaning:",
+            reply_markup=main_menu(user.id), parse_mode="HTML"
         )
     elif d == "search":
+        if not anime_db:
+            await q.edit_message_text(
+                "❌ Hozircha animeler yo'q!\n\nKanalimizga o'ting: @anidavi_official",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📺 Kanal", url="https://t.me/anidavi_official")],
+                    [InlineKeyboardButton("🔙 Orqaga", callback_data="menu")]
+                ])
+            )
+            return
         await q.edit_message_text(
-            "🔍 <b>Anime izlash</b>\n\nKanalimizga o'ting:\n👉 @anidavi_official",
+            "🔍 <b>Anime izlash</b>\n\n"
+            "Anime nomini yozing yoki rasm/video yuboring — bot topib beradi!\n\n"
+            "Yoki quyidagi kanaldan qidiring:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📺 Kanalga o'tish", url="https://t.me/anidavi_official")],
                 [InlineKeyboardButton("🔙 Orqaga", callback_data="menu")]
@@ -325,34 +425,40 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             "📚 <b>Qo'llanma</b>\n\n"
             "1️⃣ Kanalga obuna bo'ling 👉 @anidavi_official\n\n"
-            "2️⃣ Kanalda animeni toping\n\n"
-            "3️⃣ ✨ Tomosha qilish tugmasini bosing\n\n"
-            "4️⃣ Botda qismlarni tanlang va tomosha qiling!\n\n"
-            "💎 VIP obuna bilan cheklovsiz!",
+            "2️⃣ Anime izlash uchun nom yozing\n"
+            "   yoki rasm/video yuboring\n\n"
+            "3️⃣ Kanalda ✨ Tomosha qilish tugmasini bosing\n\n"
+            "4️⃣ Botda qismlarni tanlang!\n\n"
+            "💎 VIP bilan cheklovsiz tomosha!",
             reply_markup=back_menu(), parse_mode="HTML"
         )
     elif d == "ads":
         await q.edit_message_text(
             "💰 <b>Reklama va Homiylik</b>\n\n"
-            "📢 Reklama: muzokarali\n📩 Admin: @anidavi_admin",
+            "📢 Narxlar: muzokarali\n📩 Admin: @anidavi_admin",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📩 Admin", url="https://t.me/anidavi_admin")],
                 [InlineKeyboardButton("🔙 Orqaga", callback_data="menu")]
             ]), parse_mode="HTML"
         )
     elif d == "stats":
+        if user.id not in ADMIN_IDS:
+            await q.answer("❌ Ruxsat yo'q!", show_alert=True)
+            return
         await q.edit_message_text(
             f"📊 <b>Statistika</b>\n\n"
             f"👥 Foydalanuvchilar: <b>{len(users_db)}</b>\n"
             f"🎌 Animeler: <b>{len(anime_db)}</b>\n"
-            f"📺 Kanal: @anidavi_official",
+            f"👑 Adminlar: <b>{len(ADMIN_IDS)}</b>\n"
+            f"📢 Majburiy kanallar: <b>{len(REQUIRED_CHANNELS)}</b>",
             reply_markup=back_menu(), parse_mode="HTML"
         )
     elif d == "about":
         await q.edit_message_text(
             "🤖 <b>AniDavi Bot</b>\n\n"
             "🎌 O'zbek tilida anime ko'rish uchun eng qulay bot!\n\n"
-            "✨ Qismlar bo'yicha tomosha qilish\n"
+            "✨ Nom yoki rasm/video bilan qidirish\n"
+            "✨ Qismlar bo'yicha tomosha\n"
             "✨ Har kuni yangi animeler\n"
             "✨ VIP obuna\n\n"
             "📺 @anidavi_official",
@@ -362,7 +468,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             "💎 <b>VIP Obuna</b>\n\n"
             "✅ Cheklovsiz anime\n✅ HD sifat\n✅ Reklama yo'q\n\n"
-            "💰 1 oy: 15,000 so'm\n💰 3 oy: 35,000 so'm\n💰 1 yil: 100,000 so'm\n\n"
+            "💰 1 oy: 15,000 so'm\n"
+            "💰 3 oy: 35,000 so'm\n"
+            "💰 1 yil: 100,000 so'm\n\n"
             "📩 @anidavi_admin",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📩 VIP olish", url="https://t.me/anidavi_admin")],
@@ -371,6 +479,49 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ===================== ADMIN KOMANDALAR =====================
+
+async def addadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not context.args:
+        await update.message.reply_text("Format:\n/addadmin @username\n/addadmin 123456789")
+        return
+    arg = context.args[0]
+    try:
+        if arg.startswith("@"):
+            chat = await context.bot.get_chat(arg)
+            new_id = chat.id
+            name = arg
+        else:
+            new_id = int(arg)
+            name = str(new_id)
+        if new_id in ADMIN_IDS:
+            await update.message.reply_text(f"⚠️ {name} allaqachon admin!")
+            return
+        ADMIN_IDS.append(new_id)
+        await update.message.reply_text(f"✅ {name} admin qilindi!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}")
+
+async def removeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    if not context.args:
+        await update.message.reply_text("Format:\n/removeadmin @username\n/removeadmin 123456789")
+        return
+    arg = context.args[0]
+    try:
+        rem_id = int(arg) if not arg.startswith("@") else (await context.bot.get_chat(arg)).id
+        if rem_id == 5654433816:
+            await update.message.reply_text("❌ Asosiy adminni o'chirib bo'lmaydi!")
+            return
+        if rem_id in ADMIN_IDS:
+            ADMIN_IDS.remove(rem_id)
+            await update.message.reply_text("✅ Admin o'chirildi!")
+        else:
+            await update.message.reply_text("❌ Bu foydalanuvchi admin emas!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}")
 
 async def addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -431,10 +582,13 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newanime", newanime))
     app.add_handler(CommandHandler("done", done))
+    app.add_handler(CommandHandler("addadmin", addadmin))
+    app.add_handler(CommandHandler("removeadmin", removeadmin))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("addchannel", addchannel))
     app.add_handler(CommandHandler("removechannel", removechannel))
     app.add_handler(CommandHandler("listchannels", listchannels))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, video_handler))
     app.add_handler(CallbackQueryHandler(button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
